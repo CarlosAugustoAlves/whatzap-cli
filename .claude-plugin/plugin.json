@@ -1,0 +1,15 @@
+{
+  "name": "whatzap",
+  "description": "Send WhatsApp messages and manage conversation history from Claude Code",
+  "version": "0.0.1",
+  "author": {
+    "name": "Carlos Alves",
+    "email": "carlos.alves91@gmail.com"
+  },
+  "homepage": "https://github.com/CarlosAugustoAlves/whatzap-cli",
+  "repository": "https://github.com/CarlosAugustoAlves/whatzap-cli",
+  "license": "MIT",
+  "skills": [
+    { "name": "whatzap", "path": ".claude/skills/whatzap/SKILL.md" }
+  ]
+}

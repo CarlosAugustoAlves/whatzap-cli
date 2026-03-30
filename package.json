@@ -1,0 +1,54 @@
+{
+  "name": "whatzap-cli",
+  "version": "0.1.2",
+  "description": "Send WhatsApp messages from the terminal",
+  "type": "module",
+  "license": "MIT",
+  "author": "Carlos Alves <carlos.alves91@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CarlosAugustoAlves/whatzap-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CarlosAugustoAlves/whatzap-cli/issues"
+  },
+  "homepage": "https://github.com/CarlosAugustoAlves/whatzap-cli#readme",
+  "keywords": [
+    "whatsapp",
+    "cli",
+    "terminal",
+    "messaging",
+    "automation",
+    "baileys",
+    "whatsapp-web"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "whatzap": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    ".claude/skills/",
+    ".claude-plugin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.0",
+    "@whiskeysockets/baileys": "^6.7.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/qrcode-terminal": "^0.12.2",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

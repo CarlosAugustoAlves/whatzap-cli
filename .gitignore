@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data (WhatsApp session — never commit credentials)
+~/.whatzap/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local config (contains machine-specific paths)
+.claude/settings.local.json
+
+# Environment
+.env
+.env.*
