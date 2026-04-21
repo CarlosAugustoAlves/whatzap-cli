@@ -1,4 +1,5 @@
 import { execSync } from 'child_process'
+import * as readline from 'readline'
 
 interface Contact {
   name: string
@@ -34,10 +35,32 @@ tell application "Contacts"
 end tell
 `
 
-export function findContact(query: string): void {
+function prompt(question: string): Promise<string> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+  return new Promise((resolve) => rl.question(question, (answer) => { rl.close(); resolve(answer) }))
+}
+
+export async function findContact(query: string): Promise<void> {
   if (!query.trim()) {
     console.error('Usage: whatzap find-contact <query>')
     process.exitCode = 1
+    return
+  }
+
+  if (process.platform !== 'darwin') {
+    console.error('Note: automatic contact lookup is only available on macOS.')
+    console.error('On Linux and Windows, find-contact cannot query Contacts.app.')
+    const phone = await prompt(`Enter phone number for "${query}" (with country code, e.g. +15551234567): `)
+    if (!phone.trim()) {
+      console.error('No phone number provided.')
+      process.exitCode = 1
+      console.log('[]')
+      return
+    }
+    const normalized = phone.trim().startsWith('+')
+      ? `+${phone.replace(/[^\d]/g, '')}`
+      : phone.replace(/[^\d]/g, '')
+    console.log(JSON.stringify([{ name: query, phones: [normalized] }], null, 2))
     return
   }
 

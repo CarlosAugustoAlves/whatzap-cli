@@ -71,7 +71,7 @@ async function main() {
 
     case 'find-contact': {
       const query = args.join(' ')
-      findContact(query)
+      await findContact(query)
       break
     }
 
