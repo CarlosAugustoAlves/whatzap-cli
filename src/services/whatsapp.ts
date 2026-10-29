@@ -1,4 +1,5 @@
 import makeWASocket, {
+  downloadMediaMessage,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
@@ -8,6 +9,13 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom'
 import { homedir } from 'os'
 import { join } from 'path'
+
+export interface SendOptions {
+  /** Message being replied to; WhatsApp shows it quoted above the reply. */
+  quoted?: { key: { remoteJid: string; id: string; participant?: string; fromMe: boolean }; message: { conversation: string } }
+  /** JIDs mentioned with @ in the text. */
+  mentions?: string[]
+}
 
 const AUTH_DIR = join(homedir(), '.whatzap', 'auth')
 
@@ -91,7 +99,19 @@ export class WhatsAppService {
     })
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  /** Voice note (push-to-talk), optionally quoting a message. Expects OGG/Opus. */
+  /** Deletes, for everyone, a message we sent. */
+  async deleteOwn(jid: string, id: string): Promise<void> {
+    if (!this.socket) throw new Error('Not connected')
+    await this.socket.sendMessage(jid, { delete: { remoteJid: jid, fromMe: true, id } })
+  }
+
+  async sendVoice(jid: string, audio: Buffer, options: SendOptions = {}): Promise<void> {
+    if (!this.socket) throw new Error('Not connected')
+    await this.socket.sendMessage(jid, { audio, mimetype: 'audio/ogg; codecs=opus', ptt: true }, options.quoted ? { quoted: options.quoted as any } : undefined)
+  }
+
+  async sendMessage(jid: string, text: string, options: SendOptions = {}): Promise<void> {
     if (!this.socket) throw new Error('Not connected')
     // Resolve the canonical JID from WhatsApp's servers.
     // Brazilian numbers went through a 8→9 digit migration; the registered JID
@@ -101,7 +121,11 @@ export class WhatsAppService {
       const resolved = await this.resolvePhone(phone)
       if (resolved) jid = resolved
     }
-    const result = await this.socket.sendMessage(jid, { text })
+    const result = await this.socket.sendMessage(
+      jid,
+      options.mentions?.length ? { text, mentions: options.mentions } : { text },
+      options.quoted ? { quoted: options.quoted as any } : undefined
+    )
     if (result?.key?.id) {
       this.msgCache.set(result.key.id, { conversation: text })
       if (this.msgCache.size > 500) {
@@ -155,6 +179,13 @@ export class WhatsAppService {
       result[jid] = meta.subject
     }
     return result
+  }
+
+  /** Downloads the media of a received message (audio, image...) as a buffer. */
+  async downloadMedia(msg: { key: import('@whiskeysockets/baileys').WAMessageKey; message: import('@whiskeysockets/baileys').WAMessage['message'] }): Promise<Buffer> {
+    if (!this.socket) throw new Error('Not connected')
+    const sock = this.socket
+    return downloadMediaMessage(msg as any, 'buffer', {}, { logger: noopLogger as any, reuploadRequest: sock.updateMediaMessage })
   }
 
   onMessage(handler: (msg: { key: import('@whiskeysockets/baileys').WAMessageKey; message: import('@whiskeysockets/baileys').WAMessage['message']; pushName?: string | null }) => void): void {

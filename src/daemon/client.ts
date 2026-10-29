@@ -80,6 +80,26 @@ export async function sendViaDaemon(jid: string, text: string): Promise<void> {
   if (!res.ok) throw new Error(res.error ?? 'Send failed')
 }
 
+export async function replyViaDaemon(id: string, text: string, mentions: string[] = []): Promise<void> {
+  const res = await sendRequest<{ ok: boolean; error?: string }>({ command: 'reply', id, text, mentions }, 30000)
+  if (!res.ok) throw new Error(res.error ?? 'Reply failed')
+}
+
+export async function sendAudioViaDaemon(jid: string, file: string): Promise<void> {
+  const res = await sendRequest<{ ok: boolean; error?: string }>({ command: 'send-audio', jid, text: file }, 60000)
+  if (!res.ok) throw new Error(res.error ?? 'Send failed')
+}
+
+export async function replyAudioViaDaemon(id: string, file: string): Promise<void> {
+  const res = await sendRequest<{ ok: boolean; error?: string }>({ command: 'reply-audio', id, text: file }, 60000)
+  if (!res.ok) throw new Error(res.error ?? 'Reply failed')
+}
+
+export async function deleteViaDaemon(id: string): Promise<void> {
+  const res = await sendRequest<{ ok: boolean; error?: string }>({ command: 'delete', id })
+  if (!res.ok) throw new Error(res.error ?? 'Delete failed')
+}
+
 export async function stopDaemon(): Promise<void> {
   await sendRequest<{ ok: boolean }>({ command: 'stop' })
 }
