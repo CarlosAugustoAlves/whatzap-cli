@@ -10,6 +10,7 @@ import { removeWatch } from './commands/remove-watch.js'
 import { listWatch } from './commands/list-watch.js'
 import { restart } from './commands/restart.js'
 import { sendGroup } from './commands/send-group.js'
+import { reply } from './commands/reply.js'
 import { setting } from './commands/setting.js'
 import { installSkill } from './commands/install-skill.js'
 import { init } from './commands/init.js'
@@ -25,6 +26,7 @@ Usage:
   whatzap logout                         Log out and remove saved credentials
   whatzap send-message <phone> <message> Send a text message to a phone number
   whatzap send-group <group name> <message> Send a text message to a group
+  whatzap reply [--mention <jid>]... <message id> <message>  Reply quoting a recorded message and mentioning its sender
   whatzap find-contact <query>           Search macOS Contacts by name, returns JSON
   whatzap stop                           Stop the background session
   whatzap add-watch <phone|group name>    Start recording messages for a contact or group
@@ -109,6 +111,53 @@ async function main() {
         process.exit(1)
       }
       await sendGroup(args)
+      break
+    }
+
+    case 'reply': {
+      // --mention <jid> (repeatable) mentions more people; the text must carry "@<number>" for each
+      const extra: string[] = []
+      // accepted anywhere, so a flag placed after the text never leaks into the message
+      for (let i = args.indexOf('--mention'); i !== -1 && args[i + 1]; i = args.indexOf('--mention')) {
+        extra.push(args[i + 1]); args.splice(i, 2)
+      }
+      const [id, ...rest] = args
+      const message = rest.join(' ')
+      if (!id || !message) {
+        console.error('Usage: whatzap reply <message id> <message>')
+        process.exit(1)
+      }
+      await reply(id, message, extra)
+      break
+    }
+
+    case 'send-audio': {
+      const [phone, file] = args
+      if (!phone || !file) {
+        console.error('Usage: whatzap send-audio <phone> <file.ogg>')
+        process.exit(1)
+      }
+      const { ensureDaemon, sendAudioViaDaemon } = await import('./daemon/client.js')
+      const { resolve } = await import('path')
+      await ensureDaemon()
+      // a full JID (e.g. 123@lid) is used as is; a phone becomes <digits>@s.whatsapp.net
+      const jid = phone.includes('@') ? phone : `${phone.replace(/\D/g, '')}@s.whatsapp.net`
+      try { await sendAudioViaDaemon(jid, resolve(file)); console.log('Voice message sent.') }
+      catch (err) { console.error(err instanceof Error ? err.message : String(err)); process.exitCode = 1 }
+      break
+    }
+
+    case 'reply-audio': {
+      const [id, file] = args
+      if (!id || !file) {
+        console.error('Usage: whatzap reply-audio <message id> <file.ogg>')
+        process.exit(1)
+      }
+      const { ensureDaemon, replyAudioViaDaemon } = await import('./daemon/client.js')
+      const { resolve } = await import('path')
+      await ensureDaemon()
+      try { await replyAudioViaDaemon(id, resolve(file)); console.log('Voice reply sent.') }
+      catch (err) { console.error(err instanceof Error ? err.message : String(err)); process.exitCode = 1 }
       break
     }
 
