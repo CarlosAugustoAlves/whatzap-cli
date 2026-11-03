@@ -1,6 +1,7 @@
 import net from 'net'
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from 'fs'
 import { execFileSync } from 'child_process'
+import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import { join } from 'path'
 import { WhatsAppService } from '../services/whatsapp.js'
@@ -49,6 +50,13 @@ const groupCache = new Map<string, string>() // jid → name
 let server: net.Server
 
 const HISTORY_MAX = 100
+const MEDIA_DIR = join(WHATZAP_DIR, 'media')
+// The message id is chosen by the sender's device: a random suffix keeps one
+// sender from overwriting another's file, and 'wx' refuses to overwrite at all.
+function mediaName(id: string, ext: string): string {
+  const safe = id.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'media'
+  return `${safe}-${randomUUID().slice(0, 8)}.${ext}`
+}
 
 function appendHistory(jid: string, entry: object): void {
   mkdirSync(HISTORY_DIR, { recursive: true })
@@ -61,6 +69,29 @@ function appendHistory(jid: string, entry: object): void {
   writeFileSync(filepath, existing.join('\n') + '\n')
 }
 
+interface HistoryEntry { ts: string; d: 'in' | 'out'; n?: string; text: string; id?: string; p?: string; q?: string; pn?: string; fw?: boolean }
+
+// Message ids are random, but refuse to guess if one shows up in more than
+// one chat: replying in the wrong conversation is worse than not replying.
+function findHistoryEntry(id: string): { jid: string; entry: HistoryEntry } | null {
+  const found: { jid: string; entry: HistoryEntry }[] = []
+  for (const jid of watchSet) {
+    const filepath = join(HISTORY_DIR, jidToFilename(jid) + '.jsonl')
+    if (!existsSync(filepath)) continue
+    for (const line of readFileSync(filepath, 'utf8').split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const entry = JSON.parse(line) as HistoryEntry
+        if (entry.id === id) found.push({ jid, entry })
+      } catch {
+        // skip malformed line
+      }
+    }
+  }
+  if (found.length > 1) throw new Error(`Message '${id}' matches ${found.length} chats; not replying`)
+  return found[0] ?? null
+}
+
 function cleanup(): void {
   if (server) server.close()
   if (existsSync(SOCK_PATH)) unlinkSync(SOCK_PATH)
@@ -69,7 +100,7 @@ function cleanup(): void {
 }
 
 async function handleRequest(line: string, socket: net.Socket): Promise<void> {
-  let req: { command: string; jid?: string; text?: string }
+  let req: { command: string; jid?: string; text?: string; id?: string; mentions?: string[]; caption?: string }
   try {
     req = JSON.parse(line)
   } catch {
@@ -82,6 +113,68 @@ async function handleRequest(line: string, socket: net.Socket): Promise<void> {
   } else if (req.command === 'send') {
     try {
       await service.sendMessage(req.jid!, req.text!)
+      socket.write(JSON.stringify({ ok: true }) + '\n')
+    } catch (err) {
+      socket.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n')
+    }
+  } else if (req.command === 'reply') {
+    // Reply quoting a recorded message and mentioning its sender, so the
+    // answer stays attached to the question in busy groups.
+    try {
+      const found = findHistoryEntry(req.id!)
+      if (!found) throw new Error(`Message '${req.id}' not found in watched history`)
+      const { jid, entry } = found
+      const quoted = {
+        key: { remoteJid: jid, id: entry.id!, participant: entry.p, fromMe: entry.d === 'out' },
+        message: { conversation: entry.text },
+      }
+      const mention = entry.d === 'in' && entry.p ? entry.p : null
+      const text = mention ? `@${mention.split('@')[0]} ${req.text!}` : req.text!
+      const extra = (req.mentions ?? []).filter((m) => m !== mention)
+      await service.sendMessage(jid, text, { quoted, mentions: [...(mention ? [mention] : []), ...extra] })
+      socket.write(JSON.stringify({ ok: true }) + '\n')
+    } catch (err) {
+      socket.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n')
+    }
+  } else if (req.command === 'send-audio') {
+    try {
+      if (!req.text || !req.text.endsWith('.ogg') || !existsSync(req.text)) throw new Error('Audio must be an existing .ogg file')
+      await service.sendVoice(req.jid!, readFileSync(req.text))
+      socket.write(JSON.stringify({ ok: true }) + '\n')
+    } catch (err) {
+      socket.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n')
+    }
+  } else if (req.command === 'send-image') {
+    try {
+      if (!req.text || !/\.(png|jpe?g)$/i.test(req.text) || !existsSync(req.text)) throw new Error('Image must be an existing .png or .jpg file')
+      await service.sendImage(req.jid!, readFileSync(req.text), req.caption)
+      socket.write(JSON.stringify({ ok: true }) + '\n')
+    } catch (err) {
+      socket.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n')
+    }
+  } else if (req.command === 'delete') {
+    // Only messages we sent (recorded as "out" in the history) can be deleted.
+    try {
+      const found = findHistoryEntry(req.id!)
+      if (!found) throw new Error(`Message '${req.id}' not found in watched history`)
+      if (found.entry.d !== 'out') throw new Error('Only messages sent by us can be deleted')
+      await service.deleteOwn(found.jid, found.entry.id!)
+      socket.write(JSON.stringify({ ok: true }) + '\n')
+    } catch (err) {
+      socket.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n')
+    }
+  } else if (req.command === 'reply-audio') {
+    // Voice note quoting a recorded message. Only .ogg files, read by the daemon itself.
+    try {
+      const found = findHistoryEntry(req.id!)
+      if (!found) throw new Error(`Message '${req.id}' not found in watched history`)
+      if (!req.text || !req.text.endsWith('.ogg') || !existsSync(req.text)) throw new Error('Audio must be an existing .ogg file')
+      const { jid, entry } = found
+      const quoted = {
+        key: { remoteJid: jid, id: entry.id!, participant: entry.p, fromMe: entry.d === 'out' },
+        message: { conversation: entry.text },
+      }
+      await service.sendVoice(jid, readFileSync(req.text), { quoted })
       socket.write(JSON.stringify({ ok: true }) + '\n')
     } catch (err) {
       socket.write(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }) + '\n')
@@ -162,16 +255,81 @@ async function main(): Promise<void> {
     const remoteJid = resolvedJid
     if (!watchSet.has(remoteJid)) return
 
+    // Images (also inside an album) are saved too, with the caption as text.
+    const image = (message as any)?.imageMessage ?? (message as any)?.ephemeralMessage?.message?.imageMessage
+    if (image && !key.fromMe) {
+      const isGroup = remoteJid.endsWith('@g.us')
+      if (isGroup && !key.participant) return
+      const id = key.id ?? String(Date.now())
+      service.downloadMedia({ key, message }).then((buf) => {
+        mkdirSync(MEDIA_DIR, { recursive: true, mode: 0o700 })
+        const file = join(MEDIA_DIR, mediaName(id, 'jpg'))
+        writeFileSync(file, buf, { mode: 0o600, flag: 'wx' })
+        appendHistory(remoteJid, {
+          ts: new Date().toISOString(), d: 'in', n: pushName ?? undefined,
+          text: image.caption ? `[image] ${image.caption}` : '[image]',
+          id: key.id ?? undefined, p: key.participant ?? undefined,
+          q: image.contextInfo?.stanzaId ?? undefined, pn: (key as any).participantPn ?? undefined,
+          fw: image.contextInfo?.isForwarded ? true : undefined, image: file,
+        })
+      }).catch(() => {
+        appendHistory(remoteJid, { ts: new Date().toISOString(), d: 'in', n: pushName ?? undefined, text: '[image: download failed]', id: key.id ?? undefined, p: key.participant ?? undefined })
+      })
+      return
+    }
+
+    // Voice notes and audio files are saved next to the history; the entry
+    // points to the file so whoever reads the history can transcribe it.
+    const audio = message?.audioMessage
+    if (audio && !key.fromMe) {
+      const isGroup = remoteJid.endsWith('@g.us')
+      if (isGroup && !key.participant) return
+      const id = key.id ?? String(Date.now())
+      service.downloadMedia({ key, message }).then((buf) => {
+        mkdirSync(MEDIA_DIR, { recursive: true, mode: 0o700 })
+        const file = join(MEDIA_DIR, mediaName(id, 'ogg'))
+        writeFileSync(file, buf, { mode: 0o600, flag: 'wx' })
+        appendHistory(remoteJid, {
+          ts: new Date().toISOString(),
+          d: 'in',
+          n: pushName ?? undefined,
+          text: '[audio]',
+          id: key.id ?? undefined,
+          p: key.participant ?? undefined,
+          q: audio.contextInfo?.stanzaId ?? undefined,
+          pn: (key as any).participantPn ?? undefined,
+          fw: audio.contextInfo?.isForwarded ? true : undefined,
+          audio: file,
+          sec: audio.seconds ?? undefined,
+        })
+      }).catch(() => {
+        // download failed: record that an audio arrived so it is not silently lost
+        appendHistory(remoteJid, { ts: new Date().toISOString(), d: 'in', n: pushName ?? undefined, text: '[audio: download failed]', id: key.id ?? undefined, p: key.participant ?? undefined })
+      })
+      return
+    }
+
+    // Wrapped messages (ephemeral, view once, edited) carry the content inside.
+    const inner: any = (message as any)?.ephemeralMessage?.message ?? (message as any)?.viewOnceMessage?.message ?? (message as any)?.viewOnceMessageV2?.message ?? (message as any)?.editedMessage?.message?.protocolMessage?.editedMessage ?? message
+    const kind = inner ? Object.keys(inner).find((k) => k !== 'messageContextInfo') : undefined
     const text =
-      message?.conversation ??
-      message?.extendedTextMessage?.text
+      inner?.conversation ??
+      inner?.extendedTextMessage?.text ??
+      inner?.imageMessage?.caption ??
+      inner?.videoMessage?.caption ??
+      inner?.documentMessage?.caption ??
+      // Non-text types (sticker, document, location...): record that it arrived instead of dropping it silently.
+      (kind && !key.fromMe && kind !== 'protocolMessage' && kind !== 'reactionMessage' && kind !== 'senderKeyDistributionMessage' ? `[non-text message: ${kind}]` : undefined)
     if (!text) return
+    // contextInfo of the part that carries the text: quote and "forwarded" also apply to captions and wrappers.
+    const ctx = inner?.extendedTextMessage?.contextInfo ?? inner?.imageMessage?.contextInfo ?? inner?.videoMessage?.contextInfo ?? inner?.documentMessage?.contextInfo ?? (kind ? inner?.[kind]?.contextInfo : undefined)
 
     if (key.fromMe) {
       appendHistory(remoteJid, {
         ts: new Date().toISOString(),
         d: 'out',
         text,
+        id: key.id ?? undefined,
       })
       return
     }
@@ -185,6 +343,15 @@ async function main(): Promise<void> {
       d: 'in',
       n: pushName ?? undefined,
       text,
+      // id and sender let `whatzap reply` quote the message and mention its author
+      id: key.id ?? undefined,
+      p: participant ?? undefined,
+      // id of the message this one replies to, when it quotes another
+      q: ctx?.stanzaId ?? undefined,
+      // sender's phone JID as reported by the server (groups address people by LID)
+      pn: (key as any).participantPn ?? undefined,
+      // forwarded text was written by someone else; never treat it as the sender's own words
+      fw: ctx?.isForwarded ? true : undefined,
     })
   })
 

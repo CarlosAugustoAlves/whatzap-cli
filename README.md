@@ -60,6 +60,11 @@ Installs the Claude Code skill and authenticates with your WhatsApp account via 
 | `whatzap logout` | Disconnect and delete saved credentials |
 | `whatzap send-message <phone> <message>` | Send a text message (phone with country code) |
 | `whatzap send-group <group name> <message>` | Send a message to a WhatsApp group |
+| `whatzap reply <message id> <message>` | Reply to a recorded message, quoting it and mentioning its sender |
+| `whatzap reply-audio <message id> <file.ogg>` | Reply to a recorded message with a voice note |
+| `whatzap send-audio <phone\|jid> <file.ogg>` | Send a voice note to a phone number or JID |
+| `whatzap send-image <phone\|jid> <file.png\|jpg> [caption]` | Send an image (PNG or JPEG) with an optional caption |
+| `whatzap delete <message id>` | Delete, for everyone, a message we sent |
 | `whatzap find-contact <name>` | Search macOS Contacts by name, returns JSON |
 | `whatzap add-watch <phone\|group name>` | Start recording messages for a contact or group |
 | `whatzap remove-watch <phone\|group name>` | Stop recording messages |
@@ -99,6 +104,46 @@ whatzap send-group family Oi pessoal!
 whatzap send-group Work Team Meeting in 5 minutes
 ```
 
+### Reply to a Message
+
+```bash
+whatzap reply <message id> <message>
+```
+
+Replies to a message recorded in a watched contact or group (see [Watch a Contact or Group](#watch-a-contact-or-group)). The reply quotes the original message and, for incoming messages, starts with an @mention of its sender, so the answer stays attached to the question in busy groups. The message id is the `id` field of the history entry.
+
+```bash
+whatzap reply 3EB05F011B6AFCBB71534D Deploy is live!
+```
+
+Use `--mention <jid>` (repeatable, anywhere in the arguments) to mention more people; the JID must also appear as `@<number>` in the text for WhatsApp to highlight it:
+
+```bash
+whatzap reply --mention 120363000000001@lid 3EB05F011B6AFCBB71534D @120363000000001 please check
+```
+
+### Send a Voice Note
+
+```bash
+whatzap send-audio <phone|jid> <file.ogg>
+whatzap reply-audio <message id> <file.ogg>
+```
+
+Sends an Ogg/Opus file as a voice note (push-to-talk). `send-audio` takes a phone number or a full JID (e.g. `120363000000000@lid`, useful when a contact is only reachable by LID); `reply-audio` quotes a recorded message, like `reply`. Only existing `.ogg` files are accepted, and the daemon reads the file itself.
+
+```bash
+ffmpeg -i note.wav -c:a libopus -b:a 32k note.ogg
+whatzap reply-audio 3EB05F011B6AFCBB71534D note.ogg
+```
+
+### Delete a Message
+
+```bash
+whatzap delete <message id>
+```
+
+Deletes, for everyone, a message sent by this account and recorded in a watched contact or group (an `"out"` history entry). Messages from other people are refused. WhatsApp only allows this for a while after sending.
+
 ### Find a Contact (macOS only)
 
 ```bash
@@ -131,7 +176,8 @@ whatzap add-watch Work Team
 Messages are written to `~/.whatzap/history/` as newline-delimited JSON:
 
 ```json
-{"ts":"2026-03-22T10:00:00.000Z","d":"in","n":"Carlos","text":"Hello!"}
+{"ts":"2026-03-22T10:00:00.000Z","d":"in","n":"Carlos","text":"Hello!","id":"3EB05F011B6AFCBB71534D","p":"120363000000000@lid","pn":"5511999999999@s.whatsapp.net"}
+{"ts":"2026-03-22T10:00:30.000Z","d":"in","n":"Carlos","text":"[audio]","id":"3EB0AA00000000000000AA","q":"3EB05F011B6AFCBB71534D","audio":"/home/me/.whatzap/media/3EB0AA00000000000000AA-1a2b3c4d.ogg","sec":12}
 {"ts":"2026-03-22T10:01:00.000Z","d":"out","text":"Sure, see you there!"}
 ```
 
@@ -141,8 +187,15 @@ Messages are written to `~/.whatzap/history/` as newline-delimited JSON:
 | `d` | `"in"` (received) or `"out"` (sent) |
 | `n` | Sender display name (incoming only) |
 | `text` | Message text |
+| `id` | WhatsApp message id, used by `whatzap reply` |
+| `p` | Sender JID (incoming group messages only), mentioned by `whatzap reply` |
+| `pn` | Sender phone JID, when WhatsApp provides it (groups that use LIDs) |
+| `q` | Id of the message this one quotes (replies) |
+| `fw` | `true` when the message was forwarded |
+| `audio` | Path of the downloaded voice note (`~/.whatzap/media/`), with `sec` = duration |
+| `image` | Path of the downloaded image (`~/.whatzap/media/`); the caption goes in `text` |
 
-Non-text messages (images, audio, stickers) are not recorded. History is capped at the 100 most recent messages per contact or group.
+Captions, wrapped messages (ephemeral, view once, edited) and quotes are read from the part that carries the text. Other non-text messages (stickers, documents, locations) are recorded as `[non-text message: <type>]` so they don't disappear silently. Media files get a random suffix and are never overwritten. History is capped at the 100 most recent messages per contact or group.
 
 ### Manage the Watch List
 
